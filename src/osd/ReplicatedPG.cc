@@ -4280,17 +4280,8 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	if (pool.info.is_replicated())
 	  obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
 
-	interval_set<uint64_t> ch;
-	if (oi.size > 0)
-	  ch.insert(0, oi.size);
-	ctx->modified_ranges.union_of(ch);
-	if (op.extent.length + op.extent.offset != oi.size) {
-	  ctx->delta_stats.num_bytes -= oi.size;
-	  oi.size = op.extent.length + op.extent.offset;
-	  ctx->delta_stats.num_bytes += oi.size;
-	}
-	ctx->delta_stats.num_wr++;
-	ctx->delta_stats.num_wr_kb += SHIFT_ROUND_UP(op.extent.length, 10);
+	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
+	    op.extent.offset, op.extent.length, true);
       }
       break;
 
