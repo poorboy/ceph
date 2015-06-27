@@ -4211,15 +4211,19 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	} else {
 	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
 	}
-	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
-				    op.extent.offset, op.extent.length, true);
 	maybe_create_new_object(ctx);
-	if (op.extent.offset == 0 && op.extent.length >= oi.size)
-	  obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
-	else if (op.extent.offset == oi.size && obs.oi.is_data_digest())
-	  obs.oi.set_data_digest(osd_op.indata.crc32c(obs.oi.data_digest));
-	else
-	  obs.oi.clear_data_digest();
+	if (pool.info.is_replicated()) {
+	  if (op.extent.offset == 0 && op.extent.length >= oi.size)
+	    obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
+	  else if (op.extent.offset == oi.size && obs.oi.is_data_digest())
+	    obs.oi.set_data_digest(osd_op.indata.crc32c(obs.oi.data_digest));
+	  else
+	    obs.oi.clear_data_digest();
+	}
+
+	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
+	    op.extent.offset, op.extent.length, true);
+
       }
       break;
       
@@ -4232,7 +4236,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  result = -EINVAL;
 	  break;
 	}
-	result = check_offset_and_length(op.extent.offset, op.extent.length, cct->_conf->osd_max_object_size);
+	result = check_offset_and_length(0, op.extent.length, cct->_conf->osd_max_object_size);
 	if (result < 0)
 	  break;
 
@@ -4248,7 +4252,7 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	    }
 	  }
 	  ctx->mod_desc.create();
-	  t->append(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
+	  t->append(soid, 0, op.extent.length, osd_op.indata, op.flags);
 	  if (obs.exists) {
 	    map<string, bufferlist> to_set = ctx->obc->attr_cache;
 	    map<string, boost::optional<bufferlist> > &overlay =
@@ -4267,25 +4271,17 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	  }
 	} else {
 	  ctx->mod_desc.mark_unrollbackable();
-	  if (obs.exists) {
-	    t->truncate(soid, 0);
+	  t->write(soid, 0, op.extent.length, osd_op.indata, op.flags);
+	  if (obs.exists && op.extent.length < oi.size) {
+	    t->truncate(soid, op.extent.length);
 	  }
-	  t->write(soid, op.extent.offset, op.extent.length, osd_op.indata, op.flags);
 	}
 	maybe_create_new_object(ctx);
-	obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
+	if (pool.info.is_replicated())
+	  obs.oi.set_data_digest(osd_op.indata.crc32c(-1));
 
-	interval_set<uint64_t> ch;
-	if (oi.size > 0)
-	  ch.insert(0, oi.size);
-	ctx->modified_ranges.union_of(ch);
-	if (op.extent.length + op.extent.offset != oi.size) {
-	  ctx->delta_stats.num_bytes -= oi.size;
-	  oi.size = op.extent.length + op.extent.offset;
-	  ctx->delta_stats.num_bytes += oi.size;
-	}
-	ctx->delta_stats.num_wr++;
-	ctx->delta_stats.num_wr_kb += SHIFT_ROUND_UP(op.extent.length, 10);
+	write_update_size_and_usage(ctx->delta_stats, oi, ctx->modified_ranges,
+	    0, op.extent.length, true);
       }
       break;
 
